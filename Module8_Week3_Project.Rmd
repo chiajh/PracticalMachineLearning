@@ -1,0 +1,164 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Chia"
+date: "December 25, 2015"
+output: html_document
+---
+
+## Background
+
+Machine Learning is the process of using algorithms to learn from data. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+The goal of this project is to predict the manner of performing unilateral dumbbell biceps curls based on data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. The 5 possible Class include -
+
+ A: exactly according to the specification    
+ B: throwing the elbows to the front   
+ C: lifting the dumbbell only halfway    
+ D: lowering the dumbbell only halfway   
+ E: throwing the hips to the front  
+ 
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.
+
+### Data
+The training data for this project are available here: 
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: 
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+### Goal
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+## Load the libraries and setup working directory
+```{r}
+rm(list = ls(all = TRUE))
+set.seed(12345)
+library(data.table)
+library(caret)
+library(randomForest)
+library(parallel)
+library(doParallel)
+```
+
+## Getting and loading the data
+```{r}
+
+if (!file.exists("./Module8_Week3/pml-training.csv")){
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
+                  "./Module8_Week3/pml-training.csv")
+}
+if (!file.exists("./Module8_Week3/pml-testing.csv")){
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", 
+                  "./Module8_Week3/pml-testing.csv")
+}
+rawData = read.csv("./Module8_Week3/pml-training.csv", na.strings = c("NA", ""))
+rawData$classe <- as.factor(rawData$classe)  
+dim(rawData)
+summary(rawData$classe)
+```
+
+The raw dataset contained 19622 rows of data, with 160 variables. We will be predicting on classe outcome variable 
+and the data is split up between the five classes i.e. A, B, C, D, E.
+
+## Process the data
+### Clean the data
+Many variables contained missing data, so these are to be removed from the dataset. 
+In addition, those variables not related to movement sensors were also to be removed and resulted in a dataset with 53 variables.  
+Belt, arm, dumbbell, and forearm variables that do not have any missing values in the raw dataset will be predictor variables.
+
+```{r}
+isAnyNA <- sapply(rawData, function (x) any(is.na(x) | x == ""))
+isPredictor <- !isAnyNA & grepl("belt|[^(fore)]arm|dumbbell|forearm", names(isAnyNA))
+predictVar <- names(isAnyNA)[isPredictor]
+predictVar
+```
+Subset the raw dataset to include only the predictor variables and the classe outcome variable.
+
+```{r}
+allVariables <- c("classe", predictVar)
+rawData <- rawData[, allVariables]
+dim(rawData)
+names(rawData)
+```
+### Split the data
+Split the raw dataset into a 60% training and 40% test dataset.
+
+```{r}
+inTrain = createDataPartition(y=rawData$classe, p=0.6, list=FALSE)
+trainData = rawData[inTrain, ]
+testData = rawData[-inTrain, ]
+dim(trainData)
+```
+
+### Preprocess the predictor variables by centering and scaling.
+```{r}
+dataTemp <- trainData[, predictVar]
+preProc <- preProcess(dataTemp)
+preProc
+dataTempCS <- predict(preProc, dataTemp)
+trainDataCS <- data.table(data.frame(classe = trainData[, "classe"], dataTempCS))
+```
+
+Apply the centering and scaling to the test dataset.
+```{r}
+dataTemp <- testData[, predictVar]
+dataTempCS <- predict(preProc, dataTemp)
+testDataCS <- data.table(data.frame(classe = testData[, "classe"], dataTempCS))
+```
+
+## Build the prediction model
+We will now create a model to predict the classe outcome variable using a Random Forest on the remaining predictor variables.
+
+### Train a prediction model
+```{r}
+cl <- makeCluster(detectCores() - 1)
+registerDoParallel(cl)
+ctrl <- trainControl(classProbs = TRUE, savePredictions = TRUE, allowParallel = TRUE)
+system.time(trainModel <- train(classe ~ ., method = "rf", data = trainDataCS))
+stopCluster(cl)
+trainModel
+```
+
+Save train model for later use.
+```{r}
+save(trainModel, file="trainModel.RData")
+```
+
+### Evaluate the model on the train dataset
+```{r}
+prediction <- predict(trainModel, trainDataCS)
+confusionMatrix(prediction, trainData[, "classe"])
+```
+
+### Evaluate the model on the test dataset
+```{r}
+prediction <- predict(trainModel, testDataCS)
+confusionMatrix(prediction, testData[, "classe"])
+```
+
+### Show the final model 
+```{r}
+varImp(trainModel)
+trainModel$finalModel
+```
+The error rate is less than 2%.
+
+## Read the model and predict 20 different test cases for submission.
+```{r}
+load(file="trainModel.RData", verbose=TRUE)
+testCase = read.csv("./Module8_Week3/pml-testing.csv", na.strings = c("NA", ""))
+testCaseCS <- predict(preProc, testCase[, predictVar])
+prediction <- predict(trainModel, testCaseCS)
+prediction
+
+pml_write_files = function(x){
+    n = length(x)
+    for(i in 1:n){
+        filename = paste0("problem_id_", i, ".txt")
+        write.table(x[i], file=filename, quote=FALSE, row.names=FALSE, col.names=FALSE)
+    }
+}
+pml_write_files(prediction)
+```
