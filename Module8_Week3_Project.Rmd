@@ -31,20 +31,19 @@ The data for this project come from this source: http://groupware.les.inf.puc-ri
 ### Goal
 The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
 
-## Load the libraries and setup working directory
+## Load the libraries and setup working environment
 ```{r}
 rm(list = ls(all = TRUE))
 set.seed(12345)
-library(data.table)
 library(caret)
-library(randomForest)
+library(rattle)       # for Decision Tree
+library(rpart.plot)   # for Decision Tree
 library(parallel)
 library(doParallel)
 ```
 
 ## Getting and loading the data
 ```{r}
-
 if (!file.exists("./Module8_Week3/pml-training.csv")){
     download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
                   "./Module8_Week3/pml-training.csv")
@@ -94,24 +93,34 @@ dim(trainData)
 
 ### Preprocess the predictor variables by centering and scaling.
 ```{r}
-dataTemp <- trainData[, predictVar]
-preProc <- preProcess(dataTemp)
-preProc
-dataTempCS <- predict(preProc, dataTemp)
-trainDataCS <- data.table(data.frame(classe = trainData[, "classe"], dataTempCS))
+preObj <- preProcess(trainData[, predictVar], method=c("center", "scale"))
+preObj
+predTemp <- predict(preObj, trainData[, predictVar])
+trainDataCS <- data.frame(classe = trainData$classe, predTemp)
 ```
 
 Apply the centering and scaling to the test dataset.
 ```{r}
-dataTemp <- testData[, predictVar]
-dataTempCS <- predict(preProc, dataTemp)
-testDataCS <- data.table(data.frame(classe = testData[, "classe"], dataTempCS))
+predTemp <- predict(preObj, testData[, predictVar])
+testDataCS <- data.frame(classe = testData$classe, predTemp)
 ```
 
-## Build the prediction model
-We will now create a model to predict the classe outcome variable using a Random Forest on the remaining predictor variables.
+## Build the prediction models and compare it
+We will create two models to compare the accuracy of predicting the classe outcome variable on the remaining predictor variables by using the confusionMatrix.
 
-### Train a prediction model
+### Prediction with Decision Tree
+```{r}
+trainModel <- train(classe ~ ., method = "rpart", data = trainDataCS)
+fancyRpartPlot(trainModel$finalModel)
+```
+
+### Evaluate the Decision Tree on the test dataset
+```{r}
+prediction <- predict(trainModel, testDataCS)
+confusionMatrix(prediction, testData$classe)
+```
+
+### Prediction with Random Forest 
 ```{r}
 cl <- makeCluster(detectCores() - 1)
 registerDoParallel(cl)
@@ -119,37 +128,38 @@ ctrl <- trainControl(classProbs = TRUE, savePredictions = TRUE, allowParallel = 
 system.time(trainModel <- train(classe ~ ., method = "rf", data = trainDataCS))
 stopCluster(cl)
 trainModel
-```
-
-Save train model for later use.
-```{r}
 save(trainModel, file="trainModel.RData")
+plot(trainModel$finalModel, main="Random Forest: Error Rate vs Number of Trees")
 ```
 
-### Evaluate the model on the train dataset
+### Evaluate the Random Fores model on the train dataset
 ```{r}
 prediction <- predict(trainModel, trainDataCS)
-confusionMatrix(prediction, trainData[, "classe"])
+confusionMatrix(prediction, trainData$classe)
 ```
 
-### Evaluate the model on the test dataset
+### Evaluate the Random Forest model on the test dataset
 ```{r}
 prediction <- predict(trainModel, testDataCS)
-confusionMatrix(prediction, testData[, "classe"])
+cmrf <- confusionMatrix(prediction, testData$classe)
+cmrf
 ```
+
+Random Forest gives an accuracy on the Test dataset of `r round(cmrf$overall['Accuracy'], 4) * 100`%, which is more accurate than Decision Tree. 
+
+The Out of sample error is `r (1 - round(cmrf$overall['Accuracy'], 4)) * 100`%.
 
 ### Show the final model 
 ```{r}
 varImp(trainModel)
 trainModel$finalModel
 ```
-The error rate is less than 2%.
 
 ## Read the model and predict 20 different test cases for submission.
 ```{r}
 load(file="trainModel.RData", verbose=TRUE)
 testCase = read.csv("./Module8_Week3/pml-testing.csv", na.strings = c("NA", ""))
-testCaseCS <- predict(preProc, testCase[, predictVar])
+testCaseCS <- predict(preObj, testCase[, predictVar])
 prediction <- predict(trainModel, testCaseCS)
 prediction
 
